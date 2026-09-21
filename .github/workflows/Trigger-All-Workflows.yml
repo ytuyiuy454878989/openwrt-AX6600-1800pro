@@ -1,5 +1,8 @@
 name: Trigger-All-Workflows  # 主要工作流的名称
-
+#CI权限
+permissions:
+  contents: write
+  actions: write
 off:
   workflow_dispatch:  # 手动触发：通过 GitHub UI 来触发
   schedule:
