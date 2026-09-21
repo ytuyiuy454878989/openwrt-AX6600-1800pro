@@ -1,5 +1,8 @@
 name: Arthur&Athena-ImmortalWrt
-
+#CI权限
+permissions:
+  contents: write
+  actions: write
 on:
   workflow_dispatch:
   workflow_call:
