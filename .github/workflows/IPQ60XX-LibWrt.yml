@@ -197,6 +197,75 @@ jobs:
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
 
+
+    # ============================================================
+    # 新增：列举插件列表（生成 → 上传 → 追加到 Release 说明）
+    # ============================================================
+
+    - name: 生成插件列表
+      id: gen-plugins-list
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      run: |
+        # 1. 定位配置文件：优先 $CONFIG_FILE（若工作流已定义），回退 .config
+        CFG="${CONFIG_FILE:-.config}"
+        [ -f "$CFG" ] || CFG=".config"
+        if [ ! -f "$CFG" ]; then
+          echo "::error::未找到配置文件（$CFG），无法生成插件列表"
+          exit 1
+        fi
+
+        # 2. 提取插件列表：
+        #    源码树存在时用 diffconfig.sh 只取“额外添加”的软件包（与默认配置的差异项）；
+        #    否则退化为直接从配置文件提取所有 CONFIG_PACKAGE_*=y 的软件包。
+        if [ -f ./scripts/diffconfig.sh ]; then
+          PLUGINS="$(./scripts/diffconfig.sh 2>/dev/null \
+            | grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_+-]+=y$' \
+            | sed 's/^CONFIG_PACKAGE_//; s/=y$//' \
+            | sort -u || true)"
+        else
+          PLUGINS="$(grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_+-]+=y$' "$CFG" \
+            | sed 's/^CONFIG_PACKAGE_//; s/=y$//' \
+            | sort -u || true)"
+        fi
+
+        COUNT="$(printf '%s\n' "$PLUGINS" | sed '/^$/d' | wc -l)"
+        echo "提取到 $COUNT 个插件"
+
+        # 3. 生成 Markdown 插件列表文件
+        {
+          echo "### 📦 插件列表（共 $COUNT 个）"
+          echo ""
+          printf '%s\n' "$PLUGINS" | sed '/^$/d' | sed 's/^/- `/' | sed 's/$/`/'
+        } > plugins_list.md
+
+        # 输出给后续步骤使用
+        echo "list_file=plugins_list.md" >> "$GITHUB_OUTPUT"
+        echo "list_count=$COUNT" >> "$GITHUB_OUTPUT"
+
+    - name: 上传插件列表并更新 Release 说明
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      run: |
+        # 1) 将插件列表作为附件上传到 Release（--clobber 支持重复运行覆盖同名文件）
+        gh release upload "${{ env.FIRMWARE_TAG }}" plugins_list.md --clobber
+        echo "已上传插件列表附件 plugins_list.md（共 ${{ steps.gen-plugins-list.outputs.list_count }} 个插件）"
+
+        # 2) 将插件列表追加到 Release 正文末尾（带标记，重复运行不会重复追加）
+        gh release view "${{ env.FIRMWARE_TAG }}" --json body -q .body > release_body.md
+        if grep -q '<!-- PLUGINS-LIST -->' release_body.md; then
+          sed -i '/<!-- PLUGINS-LIST -->/,$d' release_body.md
+        fi
+        {
+          cat release_body.md
+          echo ""
+          echo "<!-- PLUGINS-LIST -->"
+          echo ""
+          cat plugins_list.md
+        } > new_body.md
+        gh release edit "${{ env.FIRMWARE_TAG }}" --notes-file new_body.md
+        echo "已更新 Release 说明，追加插件列表"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Delete Old Cache(删除旧缓存)
       run: |
         # 获取缓存列表并删除
